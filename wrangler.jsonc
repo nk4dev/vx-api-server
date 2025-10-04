@@ -7,5 +7,11 @@
   "observability": {
     "enabled": true
   },
-  "upload_source_maps": true
+  "upload_source_maps": true,
+  "routes": [
+    {
+      "pattern": "api.varius.technology",
+      "custom_domain": true
+    }
+  ]
 }
