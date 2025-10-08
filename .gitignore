@@ -1,5 +1,77 @@
+<<<<<<< HEAD
 node_modules/
 .env
 .wrangler/
 
 dist/
+=======
+# prod
+dist/
+
+# dev
+.yarn/
+!.yarn/releases
+.vscode/*
+!.vscode/launch.json
+!.vscode/*.code-snippets
+.idea/workspace.xml
+.idea/usage.statistics.xml
+.idea/shelf
+
+# deps
+node_modules/
+.wrangler
+
+# env
+.env
+.env.production
+.dev.vars
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+
+# Ignore dependencies
+node_modules/
+
+# Environment files
+.env
+.env.production
+.dev.vars
+
+# Wrangler / cloudflare related
+.wrangler/
+wrangler.jsonc
+
+# Build output
+dist/
+
+# Dev-tooling and editors
+.yarn/
+!.yarn/releases
+.vscode/*
+!.vscode/launch.json
+!.vscode/*.code-snippets
+.idea/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Misc
+.DS_Store
+
+# Lockfiles (if using other package managers)
+yarn.lock
+package-lock.json
