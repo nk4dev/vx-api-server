@@ -139,9 +139,7 @@ app.get('/logout', (c) => {
     return c.json({ message: 'Logged out successfully' });
 });
 
-app.get('/health', (c) => c.json({ status: 'ok' }))
-
-
+app.get('/version', (c) => c.json({ version: '0.1.2'}))
 // ルート: ログイン状態に応じてメッセージを表示
 app.get('/', async (c) => {
     const sessionCookie = await getSignedCookie(c, c.env.COOKIE_SECRET, 'user_session');
