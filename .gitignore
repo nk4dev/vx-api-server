@@ -1,10 +1,8 @@
-<<<<<<< HEAD
 node_modules/
 .env
 .wrangler/
 
 dist/
-=======
 # prod
 dist/
 
@@ -75,3 +73,5 @@ lerna-debug.log*
 # Lockfiles (if using other package managers)
 yarn.lock
 package-lock.json
+package-lock.json
+wrangler.jsonc
