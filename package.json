@@ -6,11 +6,17 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
-    "hono": "^4.9.10"
+    "@neondatabase/serverless": "^1.0.2",
+    "drizzle-orm": "^0.44.6",
+    "hono": "^4.9.10",
+    "pg": "^8.11.0",
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251008.0",
     "@types/node": "^24.7.0",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.6",
     "wrangler": "^4.4.0"
   }
 }

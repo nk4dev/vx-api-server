@@ -76,3 +76,5 @@ package-lock.json
 package-lock.json
 
 wrangler.jsonc
+
+test/
