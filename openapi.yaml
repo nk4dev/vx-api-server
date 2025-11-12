@@ -1,0 +1,469 @@
+openapi: 3.0.3
+info:
+  title: Varius API
+  version: 0.1.0
+  description: "OpenAPI specification for the vx-api-server (summary of implemented endpoints)"
+servers:
+  - url: https://api.varius.technology
+    description: Production server
+paths:
+  /auth:
+    get:
+      summary: Redirect to GitHub OAuth
+      parameters:
+        - name: redirect_url
+          in: query
+          schema:
+            type: string
+          description: Optional URL to redirect the user to after auth
+      responses:
+        '302':
+          description: Redirect to GitHub OAuth page
+  /auth/github/callback:
+    get:
+      summary: OAuth callback endpoint
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect after successful login
+        '400':
+          description: Missing authorization code
+        '500':
+          description: Internal server error during authentication
+  /auth/login:
+    post:
+      summary: API login (credential-based)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Login success
+  /auth/status:
+    post:
+      summary: Check auth status (legacy)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Status
+  /auth/api/login:
+    post:
+      summary: API login alias
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Login success
+  /auth/me:
+    get:
+      summary: Get authenticated user from signed cookie
+      responses:
+        '200':
+          description: Returns session user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /logout:
+    get:
+      summary: Clear session cookie and logout
+      responses:
+        '200':
+          description: Logged out
+  /version:
+    get:
+      summary: Server version
+      responses:
+        '200':
+          description: Version info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+  /redirect:
+    get:
+      summary: Redirect helper
+      parameters:
+        - name: url
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: user
+          in: query
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to provided URL
+        '400':
+          description: Invalid url parameter
+  /users/{id}:
+    get:
+      summary: Get user by numeric ID (GitHub ID)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserFoundResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal Server Error
+  /eth/gas:
+    get:
+      summary: Return ETH gas estimate (delegates to service)
+      responses:
+        '200':
+          description: Gas info
+  /projects:
+    post:
+      summary: Create a new project (new or legacy payload supported)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/CreateProjectPayload'
+                - $ref: '#/components/schemas/LegacyCreateProjectPayload'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '400':
+          description: Validation error
+        '409':
+          description: Project ID already exists
+    get:
+      summary: List projects (pagination) or fetch single project by projectId query
+      parameters:
+        - name: projectId
+          in: query
+          schema:
+            type: string
+          description: Optional project UUID or user-specified project_id to fetch a single project
+        - name: page
+          in: query
+          schema:
+            type: integer
+        - name: perPage
+          in: query
+          schema:
+            type: integer
+        - name: ownerId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated projects or a single project when projectId is provided
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProjectResponse'
+                      total:
+                        type: integer
+                      page:
+                        type: integer
+                      perPage:
+                        type: integer
+                  - $ref: '#/components/schemas/ProjectResponse'
+  /projects/{projectId}:
+    get:
+      summary: Get single project
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+        '404':
+          description: Project not found
+    patch:
+      summary: Update project (partial)
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PartialProjectUpdate'
+      responses:
+        '200':
+          description: Updated project
+  /projects/{projectId}/todos/{todoId}:
+    patch:
+      summary: Update a todo
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: todoId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                done:
+                  type: boolean
+                order:
+                  type: integer
+      responses:
+        '200':
+          description: Updated todo
+    delete:
+      summary: Delete a todo
+      responses:
+        '204':
+          description: Deleted
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        msg:
+          type: object
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        login:
+          type: string
+        name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+    UserResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+    UserFoundResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+    CreateProjectPayload:
+      type: object
+      required:
+        - name
+        - projectId
+        - creator
+        - currencies
+      properties:
+        name:
+          type: string
+        projectId:
+          type: string
+        description:
+          type: string
+          nullable: true
+        website:
+          type: string
+          nullable: true
+        nodeEndpoint:
+          type: string
+          nullable: true
+        creator:
+          oneOf:
+            - type: string
+            - type: integer
+        currencies:
+          type: array
+          items:
+            type: string
+        features:
+          type: array
+          items:
+            type: string
+          nullable: true
+    LegacyCreateProjectPayload:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          format: date
+        ownerId:
+          type: string
+          nullable: true
+        todos:
+          type: array
+          items:
+            type: object
+    ProjectResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        projectId:
+          type: string
+        description:
+          type: string
+          nullable: true
+        website:
+          type: string
+          nullable: true
+        nodeEndpoint:
+          type: string
+          nullable: true
+        creator:
+          type: string
+        currencies:
+          type: array
+          items:
+            type: string
+        features:
+          type: array
+          items:
+            type: string
+          nullable: true
+        todos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Todo'
+        title:
+          type: string
+          nullable: true
+        ownerId:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    Todo:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        order:
+          type: integer
+        done:
+          type: boolean
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    PartialProjectUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        website:
+          type: string
+          nullable: true
+        nodeEndpoint:
+          type: string
+          nullable: true
+        creator:
+          oneOf:
+            - type: string
+            - type: integer
+        currencies:
+          type: array
+          items:
+            type: string
+        features:
+          type: array
+          items:
+            type: string
+          nullable: true
+        title:
+          type: string
+        ownerId:
+          type: string
+        dueDate:
+          type: string
+          format: date
+
+tags:
+  - name: auth
+  - name: users
+  - name: projects
