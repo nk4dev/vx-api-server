@@ -1,12 +1,101 @@
 import { getSignedCookie, setSignedCookie, deleteCookie } from 'hono/cookie'
 
-import type { AppContext } from '../types'
+import type { HonoContext } from '../types'
 import { ensureCookieSecret, isSecureRequest, COOKIE_MAX_AGE, COOKIE_NAME } from '../utils/cookies'
 import { readBodyPayload } from '../utils/body'
 import { findStoredUser } from '../services/userLookup'
 import { normalizeUser } from '../utils/user'
 
-export const handleAuthLogin = async (c: AppContext) => {
+/**
+ * Simple password hashing using Web Crypto API.
+ * WARNING: This is a basic implementation. For production, use proper bcrypt or argon2.
+ */
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(password)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Verify password against hash.
+ */
+async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  const computed = await hashPassword(password)
+  return computed === hash
+}
+
+export const handleAuthRegister = async (c: HonoContext) => {
+  const payload = await readBodyPayload(c)
+
+  const username = payload?.username
+  const password = payload?.password
+  const email = payload?.email
+  const name = payload?.name
+
+  if (!username || !password) {
+    return c.json({ status: 'failed', error: 'username and password are required' }, 400)
+  }
+
+  const usernameStr = String(username).trim()
+  const passwordStr = String(password).trim()
+
+  if (!usernameStr || !passwordStr) {
+    return c.json({ status: 'failed', error: 'username and password cannot be empty' }, 400)
+  }
+
+  try {
+    if ((c.env as any).DATABASE_URL) {
+      const { getPgPool, registerUserPgRaw, getUserByUsernamePgRaw } = await import('../db')
+      const pool = await getPgPool((c.env as any).DATABASE_URL as string)
+      
+      try {
+        // Check if user already exists
+        const existingUser = await getUserByUsernamePgRaw(pool, usernameStr)
+        if (existingUser) {
+          return c.json({ status: 'failed', error: 'username already exists' }, 409)
+        }
+
+        // Hash password
+        const passwordHash = await hashPassword(passwordStr)
+
+        // Register user
+        const userId = await registerUserPgRaw(
+          pool,
+          usernameStr,
+          passwordHash,
+          email ? String(email).trim() : undefined,
+          name ? String(name).trim() : undefined
+        )
+
+        return c.json({
+          status: 'ok',
+          user: {
+            id: userId,
+            username: usernameStr,
+            email: email ? String(email).trim() : null,
+            name: name ? String(name).trim() : null,
+          },
+        }, 201)
+      } finally {
+        try {
+          pool.end?.()
+        } catch (_) { }
+      }
+    } else {
+      return c.json({ status: 'failed', error: 'Database not configured' }, 500)
+    }
+  } catch (err: any) {
+    const errMsg = String(err?.message ?? err)
+    if (errMsg.includes('duplicate')) {
+      return c.json({ status: 'failed', error: 'username already exists' }, 409)
+    }
+    return c.json({ status: 'failed', error: 'Registration failed', details: errMsg }, 500)
+  }
+}
+
+export const handleAuthLogin = async (c: HonoContext) => {
   const cookieSecret = ensureCookieSecret(c)
   const payload = await readBodyPayload(c)
 
@@ -75,7 +164,7 @@ export const handleAuthLogin = async (c: AppContext) => {
   return c.json(responsePayload)
 }
 
-export const handleAuthStatus = async (c: AppContext) => {
+export const handleAuthStatus = async (c: HonoContext) => {
   const cookieSecret = ensureCookieSecret(c)
   const payload = await readBodyPayload(c)
   const requestedRaw = payload?.user

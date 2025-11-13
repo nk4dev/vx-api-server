@@ -65,6 +65,15 @@ function ensureTables(client: any) {
       created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS users_auth (
+      id text PRIMARY KEY,
+      username text NOT NULL UNIQUE,
+      password_hash text NOT NULL,
+      email text,
+      name text,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
   `);
 }
 
@@ -232,4 +241,60 @@ export async function getUserByLoginPgRaw(pool: any, login: string) {
     client.release()
   }
 }
-export { AnyObj, ProjectResp, generateNanoId, getD1, getPgPool, ensureTables, ensureUsersTableD1, DEFAULT_DB,generateUUID }
+
+/** Ensure the users_auth table exists in Postgres. */
+async function ensureUsersAuthTablePg(client: any) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS users_auth (
+      id text PRIMARY KEY,
+      username text NOT NULL UNIQUE,
+      password_hash text NOT NULL,
+      email text,
+      name text,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+  `)
+}
+
+/** Register a new user in Postgres. Returns the user ID on success. */
+export async function registerUserPgRaw(
+  pool: any,
+  username: string,
+  passwordHash: string,
+  email?: string,
+  name?: string
+): Promise<string> {
+  const client = await pool.connect()
+  try {
+    await ensureUsersAuthTablePg(client)
+    
+    const userId = generateNanoId()
+    await client.query(
+      `INSERT INTO users_auth (id, username, password_hash, email, name, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
+      [userId, username, passwordHash, email ?? null, name ?? null]
+    )
+    return userId
+  } finally {
+    client.release()
+  }
+}
+
+/** Get user by username from Postgres. Returns null if not found. */
+export async function getUserByUsernamePgRaw(pool: any, username: string) {
+  const client = await pool.connect()
+  try {
+    await ensureUsersAuthTablePg(client)
+    const res = await client.query(
+      'SELECT id, username, email, name, created_at FROM users_auth WHERE username = $1 LIMIT 1',
+      [username]
+    )
+    return res.rows[0] ?? null
+  } finally {
+    client.release()
+  }
+}
+
+export type { AnyObj, ProjectResp };
+export { generateNanoId, getD1, getPgPool, ensureTables, ensureUsersTableD1, DEFAULT_DB, generateUUID };

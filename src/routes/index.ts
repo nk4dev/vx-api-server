@@ -102,8 +102,8 @@ export async function registerRoutes(app: Hono) {
            RETURNING id, project_name, project_id, description, website, node_endpoint, creator, currencies, features, created_at, updated_at`,
           [
             uuid,
-            projectName,
             nanoid,
+            projectName,
             description,
             website,
             nodeEndpoint,

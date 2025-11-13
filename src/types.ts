@@ -10,7 +10,13 @@ export type Bindings = {
   DATABASE_URL?: string
 }
 
-export type AppContext = Context<{ Bindings: Bindings }>
+export type HonoContext = Context<{ Bindings: Bindings }>
+
+// tRPC Context type
+export type AppContext = {
+  DATABASE_URL?: string
+  DB?: D1Database
+}
 
 export type GitHubUser = {
   login: string
@@ -33,6 +39,13 @@ export type StoredUser = {
   login: string
   name: string | null
   avatar_url: string | null
+}
+
+export type RegisterUserPayload = {
+  username: string     // ユーザー名（ユニーク）
+  password: string     // パスワード（ハッシュ化される）
+  email?: string       // オプショナルなメールアドレス
+  name?: string        // 表示名
 }
 
 export type BodyPayload = Record<string, unknown>

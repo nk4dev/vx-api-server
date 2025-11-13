@@ -3,16 +3,17 @@ import { getSignedCookie, setSignedCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import type { D1Database } from "@cloudflare/workers-types";
 import { ethGasService } from "./services/gas/eth";
+import { trpcServer } from "@hono/trpc-server";
+import { appRouter } from "./trpc-router";
 
-import type { Bindings, GitHubUser, TokenData, StoredUser } from "./types";
+import type { Bindings, TokenData, StoredUser } from "./types";
 import {
   ensureCookieSecret,
   isSecureRequest,
   COOKIE_NAME,
   COOKIE_MAX_AGE,
 } from "./utils/cookies";
-import { handleAuthLogin, handleAuthStatus } from "./handlers/auth";
-import { fetchUserFromGitHubById } from "./utils/github";
+import { handleAuthLogin, handleAuthStatus, handleAuthRegister } from "./handlers/auth";
 // registerRoutes is dynamically imported below to avoid pulling Node-only modules
 // (like 'pg' or Node 'crypto') into the Cloudflare Workers bundle.
 
@@ -71,186 +72,31 @@ app.use("*", async (c, next) => {
   await next();
 });
 
+// CORS middleware: allow requests from the frontend dev origin (supports credentials)
+app.use("*", async (c, next) => {
+  const origin = c.req.header('origin') || '';
+  // allowlist for local development
+  const allowedOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+  if (allowedOrigins.includes(origin)) {
+    c.header('Access-Control-Allow-Origin', origin);
+    c.header('Access-Control-Allow-Credentials', 'true');
+    c.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+
+  // Preflight handling
+  if (c.req.method === 'OPTIONS') {
+    // Return empty 204 for preflight. Cast to any to satisfy typings.
+    return c.text('', 204 as any);
+  }
+
+  await next();
+});
+
 // --- ルーティング ---
 
-// auth api handler
-// 1. ユーザーをGitHub認証ページにリダイレクト
-app.get("/auth", (c) => {
-  //console.log({GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, AUTH_HOST, COOKIE_SECRET});
-  const redirectRaw = c.req.query("redirect_url");
-  if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET) {
-    throw new HTTPException(500, {
-      message:
-        "GitHub OAuth credentials are not configured https://www.google.com/search?q=GitHub+OAuth+credentials+are+not+configured",
-    });
-  }
-  const callbackUrl = new URL("/auth/github/callback", c.env.AUTH_HOST);
-  if (redirectRaw && redirectRaw.trim().length > 0) {
-    callbackUrl.searchParams.set("url", encodeURIComponent(redirectRaw));
-  }
-
-  const params = new URLSearchParams({
-    client_id: c.env.GITHUB_CLIENT_ID,
-    redirect_uri: callbackUrl.toString(),
-    scope: "read:user user:email", // 必要な権限を要求
-    response_type: "code",
-  });
-  if (redirectRaw && redirectRaw.trim().length > 0) {
-    params.set("send", redirectRaw);
-  }
-  const authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
-  return c.redirect(authUrl);
-});
-
-// 2. GitHubからのコールバックを処理
-app.get("/auth/github/callback", async (c) => {
-  const code = c.req.query("code");
-  const requestedRaw = c.req.query("send");
-  const encodedUrlParam = c.req.query("url");
-  if (!code) {
-    throw new HTTPException(400, { message: "Authorization code is missing" });
-  }
-
-  try {
-    // 2a. codeを使ってアクセストークンを取得
-    const tokenResponse = await fetch(
-      "https://github.com/login/oauth/access_token",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          client_id: c.env.GITHUB_CLIENT_ID,
-          client_secret: c.env.GITHUB_CLIENT_SECRET,
-          code,
-        }),
-      },
-    );
-
-    const tokenData = (await tokenResponse.json()) as TokenData;
-    if (tokenData.error) {
-      throw new Error(tokenData.error_description);
-    }
-    const accessToken = tokenData.access_token;
-
-    // 2b. Use the access token to fetch GitHub user information
-    const userResponse = await fetch("https://api.github.com/user", {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": "Hono-App", // GitHub APIではUser-Agentが必須
-      },
-    });
-    const githubUser = (await userResponse.json()) as GitHubUser;
-
-    // 2c. Define only the necessary user information as session data
-    const sessionData = {
-      id: githubUser.id,
-      login: githubUser.login,
-      name: githubUser.name,
-      avatar_url: githubUser.avatar_url,
-    };
-
-    // 2d. Save user information in a signed cookie
-    const cookieSecret = ensureCookieSecret(c);
-    await setSignedCookie(
-      c,
-      COOKIE_NAME,
-      JSON.stringify(sessionData),
-      cookieSecret,
-      {
-        path: "/",
-        httpOnly: true, // Block JavaScript access
-        secure: isSecureRequest(c), // true in production (HTTPS)
-        sameSite: "Lax", // CSRF protection
-        maxAge: COOKIE_MAX_AGE, // Valid for 1 day
-      },
-    );
-
-    // 2e. Persist GitHub user to D1 via Drizzle (best-effort). If DB binding is not present, skip.
-    try {
-      if ((c.env as any).DB) {
-        const { getD1, upsertUserD1 } = await import("./db");
-        const db = getD1((c.env as any).DB as D1Database);
-        await upsertUserD1(db, {
-          id: githubUser.id,
-          login: githubUser.login,
-          name: githubUser.name,
-          avatar_url: githubUser.avatar_url,
-        });
-      }
-
-      // If a DATABASE_URL is provided (e.g., Postgres/Neon), also persist there.
-      if ((c.env as any).DATABASE_URL) {
-        const { getPgPool, upsertUserPgRaw } = await import("./db");
-        const pool = await getPgPool((c.env as any).DATABASE_URL as string);
-        try {
-          await upsertUserPgRaw(pool, {
-            id: githubUser.id,
-            login: githubUser.login,
-            name: githubUser.name,
-            avatar_url: githubUser.avatar_url,
-          });
-
-          const baseRedirect = (() => {
-            if (requestedRaw && requestedRaw.length > 0) return requestedRaw;
-            if (encodedUrlParam && encodedUrlParam.length > 0) {
-              try {
-                return decodeURIComponent(encodedUrlParam);
-              } catch (_) {
-                /* ignore */
-              }
-            }
-            return DEFAULT_DASHBOARD_REDIRECT;
-          })();
-
-          return c.redirect(
-            "/redirect?url=" +
-            encodeURIComponent(baseRedirect) +
-            "&user=" +
-            githubUser.id,
-          );
-          //return c.redirect('/redirect?user_id=1&url=' + encodeURIComponent('http://localhost:8787/users/' + githubUser.id))
-        } finally {
-          try {
-            pool.end();
-          } catch (_) { }
-        }
-      }
-    } catch (dbErr) {
-      console.error("DB upsert failed:", dbErr);
-      // don't break auth flow on DB errors
-    }
-
-    // when successful, redirect to frontend dashboard
-    const baseRedirect = (() => {
-      if (requestedRaw && requestedRaw.length > 0) return requestedRaw;
-      if (encodedUrlParam && encodedUrlParam.length > 0) {
-        try {
-          return decodeURIComponent(encodedUrlParam);
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      return DEFAULT_DASHBOARD_REDIRECT;
-    })();
-    return c.redirect(
-      "/redirect?url=" +
-      encodeURIComponent(baseRedirect) +
-      "&user=" +
-      githubUser.id,
-    );
-    //return c.redirect('/redirect?user_id=1&url=' + encodeURIComponent('http://localhost:8787/users/' + githubUser.id))
-  } catch (error) {
-    console.error("GitHub auth callback error:", error);
-    throw new HTTPException(500, {
-      message: "Internal Server Error during authentication",
-    });
-  }
-});
-
 app.post("/auth/login", handleAuthLogin);
+app.post("/auth/register", handleAuthRegister);
 app.post("/auth/status", handleAuthStatus);
 //app.get('/w3/gas', handleAuthStatus)
 
@@ -364,8 +210,8 @@ app.get("/", async (c) => {
 
             ${styles}
             ${basedContent}
-            <h1>Login with</h1>
-            <a href="/auth">Login with GitHub</a>
+            <h1>VX3 API Server</h1>
+            <p>Please use the API endpoints to authenticate and access resources.</p>
         </html>`);
   }
 });
@@ -407,12 +253,6 @@ app.get("/users/:id", async (c) => {
       }
     }
 
-    const fallbackUser = await fetchUserFromGitHubById(id);
-    if (fallbackUser) {
-      await persistUserBestEffort(c.env, fallbackUser);
-      return c.json({ user: fallbackUser });
-    }
-
     return c.json({ error: "User not found" }, 404);
   } catch (err) {
     console.error("Error fetching user:", err);
@@ -442,5 +282,18 @@ app.get("/users/:id", async (c) => {
   }
 })();
 
+// Mount tRPC router
+app.use(
+  '/trpc/*',
+  trpcServer({
+    router: appRouter,
+    createContext: () => {
+      return {
+        DATABASE_URL: process.env.DATABASE_URL,
+        DB: undefined,
+      };
+    },
+  })
+);
+
 export default app;
-// Remove this entire function - fetch is a global Web API

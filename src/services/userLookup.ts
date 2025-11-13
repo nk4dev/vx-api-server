@@ -1,14 +1,15 @@
 import type { D1Database } from '@cloudflare/workers-types'
 
-import type { AppContext, StoredUser } from '../types'
+import type { HonoContext, AppContext, StoredUser } from '../types'
 import { normalizeUser } from '../utils/user'
-import { fetchUserFromGitHubById, fetchUserFromGitHubByLogin } from '../utils/github'
 
-export async function findStoredUser(c: AppContext, identifier: string): Promise<StoredUser | null> {
+// Accept either a Hono request context or the simplified AppContext used by tRPC.
+export async function findStoredUser(c: HonoContext | AppContext, identifier: string): Promise<StoredUser | null> {
   const trimmed = identifier?.trim()
   if (!trimmed) return null
 
-  const envAny = c.env as any
+  // Support both context shapes: Hono provides `env`, while AppContext exposes DATABASE_URL/DB at top level.
+  const envAny = (c as any).env ?? (c as any)
   const idCandidate = Number(trimmed)
   const hasNumericId = Number.isFinite(idCandidate)
 
@@ -46,10 +47,5 @@ export async function findStoredUser(c: AppContext, identifier: string): Promise
     console.error('Postgres lookup failed:', err)
   }
 
-  if (hasNumericId) {
-    const viaId = await fetchUserFromGitHubById(idCandidate)
-    if (viaId) return viaId
-  }
-
-  return await fetchUserFromGitHubByLogin(trimmed)
+  return null
 }

@@ -1,4 +1,4 @@
-import type { AppContext, BodyPayload } from '../types'
+import type { HonoContext, BodyPayload } from '../types'
 
 const malformedJsonFixer = /,\s*"([^"\\]+)"\s*,\s*"/g
 
@@ -37,7 +37,7 @@ function paramsToObject(params: URLSearchParams): BodyPayload {
   return obj
 }
 
-export async function readBodyPayload(c: AppContext): Promise<BodyPayload> {
+export async function readBodyPayload(c: HonoContext): Promise<BodyPayload> {
   const rawBody = await c.req.text()
   if (!rawBody) return {}
   const trimmed = rawBody.trim()
