@@ -8,6 +8,9 @@ Connect API with...
 - curl
 - sdk (coming soon)
 
+## swagger ui
+https://api.varius.technology/swagger/vx
+
 ## Authentication
 
 URL format:
@@ -22,24 +25,11 @@ Authorized User Data Response Format
 curl -X GET https://api.varius.technology/users/<USER_ID>
 ```
 
-## Get Gas Data
-```bash
-## curl
-curl -X POST -d '{"ProjectName":"sampleapp"}' https://api.varius.technology/gas
-```
-
-## Your VX Project Signing 
-```bash
-## curl
-curl -X POST -d '{"projectName":"sampleproject"}' https://api.varius.technology/vx
-```
-
 ## Create Wallet 
 on local(or your server)
 ```bash
 ```
 
- 
 on chain
 ```bash
 ```

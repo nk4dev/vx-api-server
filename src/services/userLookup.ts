@@ -30,7 +30,7 @@ export async function findStoredUser(c: AppContext, identifier: string): Promise
   try {
     if (envAny.DATABASE_URL) {
       const { getPgPool, getUserByIdPgRaw, getUserByLoginPgRaw } = await import('../db')
-      const pool = getPgPool(envAny.DATABASE_URL as string)
+      const pool = await getPgPool(envAny.DATABASE_URL as string)
       try {
         if (hasNumericId) {
           const found = normalizeUser(await getUserByIdPgRaw(pool, idCandidate))

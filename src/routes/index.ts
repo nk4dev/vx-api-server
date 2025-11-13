@@ -1,81 +1,15 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
+import { AnyObj, ProjectResp, generateNanoId, generateUUID, ensureTables, DEFAULT_DB } from "../db";
+// Postgres (postgres-js) + Drizzle
+
 // `getPgPool` is dynamically imported inside handlers to avoid loading `pg` at module
 // initialization time (which breaks Cloudflare Workers / Miniflare runtime).
 // Use Web Crypto's randomUUID when available, otherwise fallback to a small UUID v4 generator.
-function generateUUID(): string {
-  try {
-    // @ts-ignore
-    if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
-      // Web Crypto API
-      // @ts-ignore
-      return (crypto as any).randomUUID();
-    }
-  } catch (_) {}
-  // fallback (not fully cryptographically strong)
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
 
-/**
- * Register routes for:
- *  - /eth/gas  (delegates to services/eth/gas.handleGas)
- *  - /projects and nested /todos routes (basic Postgres-backed CRUD)
- *
- * Notes:
- * - Expects a Postgres connection string in process.env.DATABASE_URL.
- * - Creates simple `projects` and `todos` tables if they don't exist.
- * - Uses node-postgres Pool via getPgPool().
- *
- * This file focuses on wiring + minimal implementations. It is intentionally
- * small and defensive; production usage should add validation, pagination
- * improvements, prepared migrations, connection lifecycle handling, and tests.
- */
-
-type AnyObj = Record<string, any>;
-type ProjectResp = AnyObj & { todos?: AnyObj[] };
-
-const DEFAULT_DB = "postgres://postgres:postgres@localhost:5432/postgres";
-
-function ensureTables(client: any) {
-  // Creates simple projects & todos tables if missing.
-  // - projects.id is text (UUID)
-  // - todos.id is text (UUID) and references projects(id)
-  return client.query(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id text PRIMARY KEY,
-      name text NOT NULL,
-      project_id text NOT NULL UNIQUE,
-      description text,
-      website text,
-      node_endpoint text,
-      creator text NOT NULL,
-      currencies jsonb NOT NULL DEFAULT '[]'::jsonb,
-      features jsonb,
-      title text,
-      owner_id text,
-      due_date date,
-      created_at timestamptz NOT NULL DEFAULT NOW(),
-      updated_at timestamptz NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS todos (
-      id text PRIMARY KEY,
-      project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      title text NOT NULL,
-      "order" integer,
-      done boolean NOT NULL DEFAULT false,
-      created_at timestamptz NOT NULL DEFAULT NOW(),
-      updated_at timestamptz NOT NULL DEFAULT NOW()
-    );
-  `);
-}
 
 function projectRowToResponse(row: AnyObj): ProjectResp {
-  const currencies = Array.isArray(row.currencies) 
-    ? row.currencies 
+  const currencies = Array.isArray(row.currencies)
+    ? row.currencies
     : (typeof row.currencies === 'string' ? JSON.parse(row.currencies) : []);
   const features = Array.isArray(row.features)
     ? row.features
@@ -120,30 +54,34 @@ export async function registerRoutes(app: Hono) {
   const databaseUrl = process.env.DATABASE_URL ?? DEFAULT_DB;
   // Dynamically import getPgPool to avoid bundling 'pg' for Cloudflare Workers.
   const { getPgPool } = await import("../db");
-  const pool = getPgPool(databaseUrl);
+  const pool = await getPgPool(databaseUrl);
 
   // Create project (with optional todos)
   app.post("/projects", async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    
-    // 新しいAPI: name, projectId, creator, currencies
-    const newApiMode = body.name && body.projectId && body.creator && Array.isArray(body.currencies);
+
+    // 新しいAPI: projectName, projectId, creator, currencies
+    const newApiMode = body.projectName && body.creator && Array.isArray(body.currencies);
     // レガシーAPI: title
     const legacyApiMode = body.title && !newApiMode;
 
     if (newApiMode) {
       // 新しいAPI
-      const name = typeof body.name === "string" ? body.name.trim() : "";
-      const projectId = typeof body.projectId === "string" ? body.projectId.trim() : "";
+      const projectName = typeof body.projectName === "string" ? body.projectName.trim() : "";
       const creator = String(body.creator).trim();
       const currencies = Array.isArray(body.currencies) ? body.currencies : [];
 
-      if (!name || !projectId || !creator || currencies.length === 0) {
+      if (!projectName || !creator || currencies.length === 0) {
+        console.log("invalid input:", { projectName, creator, currencies });
         return c.json({
-          message: "name, projectId, creator, and currencies (non-empty array) are required",
+          message: "projectName, creator, and currencies (non-empty array) are required",
+          sample: {
+            projectName: "My Project",
+            creator: "creator@example.com",
+            currencies: ["USD", "EUR"]
+          }
         }, 400);
       }
-
       const description = body.description ?? null;
       const website = body.website ?? null;
       const nodeEndpoint = body.nodeEndpoint ?? null;
@@ -154,17 +92,18 @@ export async function registerRoutes(app: Hono) {
         await ensureTables(client);
         await client.query("BEGIN");
 
-  const uuid = generateUUID();
+        const uuid = generateUUID();
+        const nanoid = generateNanoId();
         const insertRes = await client.query(
           `INSERT INTO projects(
-            id, name, project_id, description, website, node_endpoint, 
+            id, project_id, project_name, description, website, node_endpoint, 
             creator, currencies, features, created_at, updated_at
            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-           RETURNING id, name, project_id, description, website, node_endpoint, creator, currencies, features, created_at, updated_at`,
+           RETURNING id, project_name, project_id, description, website, node_endpoint, creator, currencies, features, created_at, updated_at`,
           [
             uuid,
-            name,
-            projectId,
+            projectName,
+            nanoid,
             description,
             website,
             nodeEndpoint,
@@ -182,7 +121,7 @@ export async function registerRoutes(app: Hono) {
         for (let i = 0; i < todosIn.length; i++) {
           const t = todosIn[i];
           if (!t || typeof t.title !== "string") continue;
-          const todoId = generateUUID();
+          const todoId = generateNanoId();
           const order = typeof t.order === "number" ? t.order : i + 1;
           await client.query(
             `INSERT INTO todos(id, project_id, title, "order", done, created_at, updated_at)
@@ -207,7 +146,7 @@ export async function registerRoutes(app: Hono) {
       } catch (err: any) {
         try {
           await client.query("ROLLBACK");
-        } catch (_) {}
+        } catch (_) { }
         const errMsg = String(err?.message ?? err);
         if (errMsg.includes("duplicate") && errMsg.includes("project_id")) {
           return c.json(
@@ -238,7 +177,7 @@ export async function registerRoutes(app: Hono) {
         await ensureTables(client);
         await client.query("BEGIN");
 
-  const projectId = generateUUID();
+        const projectId = generateNanoId();
         const insertProjectRes = await client.query(
           `INSERT INTO projects(id, title, description, owner_id, due_date, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
@@ -253,7 +192,7 @@ export async function registerRoutes(app: Hono) {
         for (let i = 0; i < todosIn.length; i++) {
           const t = todosIn[i];
           if (!t || typeof t.title !== "string") continue;
-          const todoId = generateUUID();
+          const todoId = generateNanoId();
           const order = typeof t.order === "number" ? t.order : i + 1;
           await client.query(
             `INSERT INTO todos(id, project_id, title, "order", done, created_at, updated_at)
@@ -278,7 +217,7 @@ export async function registerRoutes(app: Hono) {
       } catch (err: any) {
         try {
           await client.query("ROLLBACK");
-        } catch (_) {}
+        } catch (_) { }
         return c.json(
           { message: "DB error", details: String(err?.message ?? err) },
           500,
@@ -311,7 +250,7 @@ export async function registerRoutes(app: Hono) {
 
       if (projectIdQuery) {
         const res = await client.query(
-          `SELECT id, name, project_id, description, website, node_endpoint, creator, currencies, features,
+          `SELECT id, project_name, project_id, description, website, node_endpoint, creator, currencies, features,
                   title, owner_id, due_date, created_at, updated_at 
            FROM projects WHERE id = $1 OR project_id = $1 LIMIT 1`,
           [projectIdQuery],
@@ -336,7 +275,7 @@ export async function registerRoutes(app: Hono) {
       }
       params.push(perPage, offset);
       const projectsRes = await client.query(
-        `SELECT id, name, project_id, description, website, node_endpoint, creator, currencies, features,
+        `SELECT id, project_name, project_id, description, website, node_endpoint, creator, currencies, features,
                 title, owner_id, due_date, created_at, updated_at
          FROM projects
          ${whereClause}
@@ -390,7 +329,7 @@ export async function registerRoutes(app: Hono) {
     try {
       await ensureTables(client);
       const res = await client.query(
-        `SELECT id, name, project_id, description, website, node_endpoint, creator, currencies, features,
+        `SELECT id, project_name, project_id, description, website, node_endpoint, creator, currencies, features,
                 title, owner_id, due_date, created_at, updated_at 
          FROM projects WHERE id = $1 LIMIT 1`,
         [projectId],

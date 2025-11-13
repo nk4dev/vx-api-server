@@ -39,7 +39,7 @@ async function persistUserBestEffort(env: Bindings, user: StoredUser) {
   if ((env as any).DATABASE_URL) {
     try {
       const { getPgPool, upsertUserPgRaw } = await import("./db");
-      const pool = getPgPool((env as any).DATABASE_URL as string);
+      const pool = await getPgPool((env as any).DATABASE_URL as string);
       try {
         await upsertUserPgRaw(pool, user);
       } finally {
@@ -59,12 +59,14 @@ app.use("*", async (c, next) => {
   const path = (c.req as any).path ?? url.pathname;
   const pathWithQuery = `${path}${url.search}`;
   const envmode: string | null  = process.env.NODE_ENV === 'development' ? 'development' : null;
-  if (c.req.method === "GET") {
-    console.log(` \x1b[32mGET\x1b[0m \n [path] => ${pathWithQuery} (env: ${envmode})`);
-  } else if (c.req.method === "POST") {
-    console.log(` \x1b[34mPOST\x1b[0m \n [path] => ${pathWithQuery} (env: ${envmode})`);
-  } else {
+  if (c.req.method === "GET" && process.env.NODE_ENV === 'development') {
+    console.log(` \x1b[32mGET\x1b[0m [path] => ${pathWithQuery} (env: ${envmode})`);
+  } else if (c.req.method === "POST" && process.env.NODE_ENV === 'development') {
+    console.log(` \x1b[34mPOST\x1b[0m [path] => ${pathWithQuery} (env: ${envmode})`);
+  } else if (process.env.NODE_ENV === 'development') {
     console.log(`\n Method => ${c.req.method} \n [path] => ${pathWithQuery} (env: ${envmode})`);
+  } else {
+    null;
   }
   await next();
 });
@@ -182,7 +184,7 @@ app.get("/auth/github/callback", async (c) => {
       // If a DATABASE_URL is provided (e.g., Postgres/Neon), also persist there.
       if ((c.env as any).DATABASE_URL) {
         const { getPgPool, upsertUserPgRaw } = await import("./db");
-        const pool = getPgPool((c.env as any).DATABASE_URL as string);
+        const pool = await getPgPool((c.env as any).DATABASE_URL as string);
         try {
           await upsertUserPgRaw(pool, {
             id: githubUser.id,
@@ -391,7 +393,7 @@ app.get("/users/:id", async (c) => {
     if ((c.env as any).DATABASE_URL) {
       try {
         const { getPgPool, getUserByIdPgRaw } = await import("./db");
-        const pool = getPgPool((c.env as any).DATABASE_URL as string);
+        const pool = await getPgPool((c.env as any).DATABASE_URL as string);
         try {
           const user = await getUserByIdPgRaw(pool, id);
           if (user) return c.json({ user });

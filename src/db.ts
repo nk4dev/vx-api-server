@@ -1,13 +1,74 @@
 import { drizzle } from 'drizzle-orm/d1'
 import { sql } from 'drizzle-orm'
 import type { D1Database } from '@cloudflare/workers-types'
+import { nanoid } from 'nanoid'
 
-// Postgres (postgres-js) + Drizzle
-import pkg from 'pg'
-const { Pool } = pkg
-import type { Pool as PgPool, PoolClient } from 'pg'
+function generateNanoId(): string {
+  return nanoid(21);
+}
 
-export function getD1(d1: D1Database) {
+function generateUUID(): string {
+  // Simple UUIDv4 generator
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  })
+}
+
+/**
+ * Register routes for:
+ *  - /eth/gas  (delegates to services/eth/gas.handleGas)
+ *  - /projects and nested /todos routes (basic Postgres-backed CRUD)
+ *
+ * Notes:
+ * - Expects a Postgres connection string in process.env.DATABASE_URL.
+ * - Creates simple `projects` and `todos` tables if they don't exist.
+ * - Uses node-postgres Pool via getPgPool().
+ *
+ * This file focuses on wiring + minimal implementations. It is intentionally
+ * small and defensive; production usage should add validation, pagination
+ * improvements, prepared migrations, connection lifecycle handling, and tests.
+ */
+
+type AnyObj = Record<string, any>;
+type ProjectResp = AnyObj & { todos?: AnyObj[] };
+
+const DEFAULT_DB = "postgres://postgres:postgres@localhost:5432/postgres";
+
+function ensureTables(client: any) {
+  // Creates simple projects & todos tables if missing.
+  // - projects.id is text (UUID)
+  // - todos.id is text (UUID) and references projects(id)
+  return client.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id text PRIMARY KEY,
+      project_id text NOT NULL UNIQUE,
+      project_name text NOT NULL,
+      description text,
+      website text,
+      node_endpoint text,
+      creator text NOT NULL,
+      currencies jsonb NOT NULL DEFAULT '[]'::jsonb,
+      features jsonb,
+      title text,
+      owner_id text,
+      due_date date,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS todos (
+      id text PRIMARY KEY,
+      project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title text NOT NULL,
+      "order" integer,
+      done boolean NOT NULL DEFAULT false,
+      created_at timestamptz NOT NULL DEFAULT NOW(),
+      updated_at timestamptz NOT NULL DEFAULT NOW()
+    );
+  `);
+}
+
+function getD1(d1: D1Database) {
   return drizzle(d1)
 }
 
@@ -33,16 +94,20 @@ export async function upsertUserD1(db: ReturnType<typeof getD1>, user: { id: num
   `)
 }
 
-// Postgres helper: create a postgres-js client and a Drizzle adapter
-export function getPgPool(databaseUrl: string): PgPool {
-  return new Pool({ connectionString: databaseUrl })
+// Postgres helper: create a node-postgres Pool via dynamic import.
+// This avoids importing 'pg' at module initialization time which breaks
+// bundling for Cloudflare Workers / Miniflare.
+async function getPgPool(databaseUrl: string): Promise<any> {
+  const mod = await import('pg');
+  const { Pool } = mod as any;
+  return new Pool({ connectionString: databaseUrl });
 }
 
 /**
  * Optional: if Drizzle's Postgres adapter is available in this environment, you can create a Drizzle instance.
  * This function will attempt a dynamic import of a Drizzle Postgres adapter and return it; if not available, it throws.
  */
-export async function getPgDrizzleIfAvailable(pool: PgPool) {
+export async function getPgDrizzleIfAvailable(pool: any) {
   try {
     // Newer Drizzle versions have an adapter under 'drizzle-orm/pg' or 'drizzle-orm/postgres-js'.
     // Try both possibilities.
@@ -67,7 +132,7 @@ export async function getPgDrizzleIfAvailable(pool: PgPool) {
 }
 
 /** Upsert user into Postgres using node-postgres (raw SQL). */
-async function ensureUsersTablePg(client: PoolClient) {
+async function ensureUsersTablePg(client: any) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS users (
       id bigint PRIMARY KEY,
@@ -78,7 +143,7 @@ async function ensureUsersTablePg(client: PoolClient) {
   `)
 }
 
-export async function upsertUserPgRaw(pool: PgPool, user: { id: number; login: string; name?: string | null; avatar_url?: string | null }) {
+export async function upsertUserPgRaw(pool: any, user: { id: number; login: string; name?: string | null; avatar_url?: string | null }) {
   const client = await pool.connect()
   try {
     await ensureUsersTablePg(client)
@@ -116,7 +181,7 @@ export async function getUserByIdD1(db: ReturnType<typeof getD1>, id: number) {
 }
 
 /** Get user by id from Postgres (raw). Returns null if not found. */
-export async function getUserByIdPgRaw(pool: PgPool, id: number) {
+export async function getUserByIdPgRaw(pool: any, id: number) {
   const client = await pool.connect()
   try {
     await ensureUsersTablePg(client)
@@ -152,7 +217,7 @@ export async function getUserByLoginD1(db: ReturnType<typeof getD1>, login: stri
 }
 
 /** Get user by login from Postgres (raw). Returns null if not found. */
-export async function getUserByLoginPgRaw(pool: PgPool, login: string) {
+export async function getUserByLoginPgRaw(pool: any, login: string) {
   const client = await pool.connect()
   try {
     await ensureUsersTablePg(client)
@@ -167,3 +232,4 @@ export async function getUserByLoginPgRaw(pool: PgPool, login: string) {
     client.release()
   }
 }
+export { AnyObj, ProjectResp, generateNanoId, getD1, getPgPool, ensureTables, ensureUsersTableD1, DEFAULT_DB,generateUUID }
